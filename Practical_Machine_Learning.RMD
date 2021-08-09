@@ -1,0 +1,201 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Luis Ballesteros"
+date: "2021/08/08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(knitr)
+library(caret)
+# library(rpart)
+# library(rpart.plot)
+# library(rattle)
+library(randomForest)
+# library(corrplot)
+library(randomForestExplainer)
+library(ggplot2)
+set.seed(2701)
+```
+
+# Summary
+From the activity data of 6 people collected in the following link http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset) we are going to create a model that allows us to discern what type of activity they are doing.
+
+Se ha seleccionado el modelo "Random Forest" para realizar el análisis.
+
+# Data import and cleaning
+We use the read.csv function to import the training and test data sets.
+
+We set the seed value for reproducibility to 2701. 
+```{r import_data, cache=TRUE}
+# Establecemos los valores de Nan
+data <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                     na.strings=c("NA","#DIV/0!",""))
+dim_data <- dim(data)
+# convert "classe" to factor
+data$classe <- factor(data$classe)
+misc_cols <- c(1,3:7)
+data <- data %>%
+    select(-all_of(misc_cols))
+
+# str(data)
+
+# remove variables with Nearly Zero Variance
+variable_near_zero_variance <- nearZeroVar(data)
+data <- data[, -variable_near_zero_variance]
+#str(data)
+#summary(data)
+dim_data_nzv <- dim(data)
+
+na_95 <- sapply(data, function(x) mean(is.na(x))) > 0.95
+data <- data[, na_95==FALSE]
+
+dim_data_na_95 <- dim(data)
+# import test case
+test_cases <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                    na.strings=c("NA","#DIV/0!",""))
+dim_test_cases <- dim(test_cases)
+```
+
+Data are composed of `r dim_data[1]` records and `r dim_data[2]` variables. 
+
+We eliminate variables 1, 3, 4, 5, 6, 7 which are only descriptor variables. If we kept these variables the final fit by Random Forest would be perfect in both training and test data. We also eliminate variables that have a variance close to zero. The variables are reduced from `r dim_data[2]` to `r dim_data_nzv[2]`.
+
+We eliminated variables with more than 95% of Na values. The variables are reduced to `r dim_data_na_95[2]`.
+
+```{r}
+str(data)
+```
+
+The objective of this analysis is to classify the data into five different types based on the variable "class". For this reason, we converted the variable "class" into a categorical variable in order to change the type of adjustment from regression to classification. 
+
+
+# Prediction Model Building
+
+## Data split
+We split the data into training (70%) and test (30%).
+
+```{r partition}
+# create training and test partition
+inTrain <- createDataPartition(data$classe, p=0.7, list=FALSE)
+training = data[inTrain,]
+# dim(training)
+testing = data[-inTrain,]
+# dim(testing)
+```
+
+## Random Forests
+
+For the Random Forest analysis, the randomForest library has been selected and for its explanation the randomForestExplainer library has been selected.
+
+A cross-validation with a value of 3 has been performed through the traincontrol function.
+
+```{r RF, cache=TRUE}
+# model fit
+control_RF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+#modfit_RF <- train(classe ~ ., data=training, method="rf",
+#                          trControl=control_RF)
+modfit_RF <- randomForest(classe ~ ., 
+                          data=training, 
+                          trControl=control_RF,
+                          localImp = TRUE)
+# modfit_RF$finalModel
+modfit_RF 
+
+```
+
+The Out-of-bag OOB error estimate rate is 0.55%, which is very good, i.e. 99.45 % accuracy. If we look at the Confusion Matrix, we can see that classification error is very low. This shows that our RF model is performing well in classifying the train set.
+
+```{r, cache=TRUE}
+# prediction on Test dataset
+
+predict_RF <- predict(modfit_RF, newdata=testing)
+# plot(predict_RF)
+confu_matrix_rf <- confusionMatrix(predict_RF, testing$classe)
+confu_matrix_rf
+```
+
+
+```{r plot_learning_curve, cache=TRUE}
+
+plot(modfit_RF, main = "Learning curve of the forest") #, xlim= c(0,100))
+```
+
+
+## Distribution of minimal depth
+The plot below shows the distribution of minimal depth among the trees of forest analysis. Note that:
+
+- the mean of the distribution is marked by a vertical bar with a value label on it (the scale for it is different than for the rest of the plot),
+- the scale of the X axis goes from zero to the maximum number of trees in which any variable was used for splitting.
+
+```{r, cache=TRUE}
+min_depth_frame <- min_depth_distribution(modfit_RF)
+# head(min_depth_frame, n = 10)
+plot_min_depth_distribution(min_depth_frame)
+
+```
+
+## Importance measures
+
+The following table lists the parameters of the 10 most important variables ordered by mean_min_depth.
+
+```{r, cache=TRUE}
+importance_frame <- measure_importance(modfit_RF)
+knitr::kable(head(arrange(importance_frame, mean_min_depth), n = 10))
+
+
+```
+
+
+```{r}
+importance <- importance(modfit_RF)
+varImportance <- data.frame(Variables = row.names(importance),
+                           Importance =round(importance[, "MeanDecreaseGini"],2))
+rankImportance <- varImportance %>% 
+    mutate(Rank=paste("#",dense_rank(desc(Importance))))
+
+
+```
+
+
+```{r}
+ggplot(rankImportance,aes(x=reorder(Variables,Importance),
+                        y=Importance,fill=Importance))+ 
+  geom_bar(stat="identity") + 
+  geom_text(aes(x = Variables, y = 0.5, label = Rank),
+            hjust=0, vjust=0.55, size = 3, colour = "white") +
+  labs(x = "Variables", title = "Importance of the RF model as a function of 'Mean Decrease Gini'") +
+  coord_flip() + 
+  theme_classic()
+```
+
+
+## Multi-way importance plot
+The multi-way importance plot shows the relation between three measures of importance and labels 10 variables which scored best when it comes to these three measures (i.e. for which the sum of the ranks for those measures is the lowest).
+
+The first multi-way importance plot focuses on three importance measures that derive from the structure of trees in the forest:
+
+- mean depth of first split on the variable,
+- number of trees in which the root is split on the variable,
+- the total number of nodes in the forest that split on that variable.
+
+```{r, cache=TRUE}
+plot_multi_way_importance(importance_frame, size_measure = "no_of_nodes", min_no_of_trees = 30)
+```
+
+The second multi-way importance plot shows importance measures that derive from the role a variable plays in prediction: accuracy_decrease and gini_decrease with the additional information on the p-value based on a binomial distribution of the number of nodes split on the variable assuming that variables are randomly drawn to form splits (i.e. if a variable is significant it means that the variable is used for splitting more often than would be the case if the selection was random).
+
+```{r warning=FALSE, , cache=TRUE}
+plot_multi_way_importance(importance_frame, x_measure = "accuracy_decrease", y_measure = "gini_decrease", size_measure = "p_value")
+```
+
+# Applying the selected Model to the Test Data
+The Random Forest model will be applied to predict the 20 quiz results (testing dataset) as shown below.
+
+```{r}
+predict_test_cases <- predict(modfit_RF, newdata=test_cases)
+predict_test_cases
+```
+
