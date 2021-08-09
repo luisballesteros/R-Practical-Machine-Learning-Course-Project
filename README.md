@@ -1,4 +1,6 @@
 # R Practical Machine Learning. CourseProject.
+view final report https://luisballesteros.github.io/R-Practical-Machine-Learning-Course-Project/Practical_Machine_Learning.html
+
 https://www.coursera.org/learn/practical-machine-learning
 
 ## Background
